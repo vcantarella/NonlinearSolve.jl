@@ -1,38 +1,40 @@
 """
-    TrustRegion(;
+    BoundedTrustRegion(;
         concrete_jac = nothing, linsolve = nothing,
         radius_update_scheme = RadiusUpdateSchemes.Simple, max_trust_radius::Real = 0 // 1,
         initial_trust_radius::Real = 0 // 1, step_threshold::Real = 1 // 10000,
         shrink_threshold::Real = 1 // 4, expand_threshold::Real = 3 // 4,
         shrink_factor::Real = 1 // 4, expand_factor::Real = 2 // 1,
         max_shrink_times::Int = 32,
-        vjp_autodiff = nothing, autodiff = nothing, jvp_autodiff = nothing
+        vjp_autodiff = nothing, autodiff = nothing, jvp_autodiff = nothing,
+        lb = nothing, ub = nothing
     )
 
-An advanced TrustRegion implementation with support for efficient handling of sparse
+A modification of the advanced TrustRegion implementation with support for efficient handling of sparse
 matrices via colored automatic differentiation and preconditioned linear solvers. Designed
-for large-scale and numerically-difficult nonlinear systems.
+for large-scale and numerically-difficult nonlinear systems, but adapted to handle lower and upper bounds on the parameter values.
 
 ### Keyword Arguments
 
   - `radius_update_scheme`: the scheme used to update the trust region radius. Defaults to
-    `RadiusUpdateSchemes.Simple`. See [`RadiusUpdateSchemes`](@ref) for more details. For a
+    `RadiusUpdateSchemes.WangYuan`. See [`RadiusUpdateSchemes`](@ref) for more details. For a
     review on trust region radius update schemes, see [yuan2015recent](@citet).
 
 For the remaining arguments, see [`NonlinearSolveFirstOrder.GenericTrustRegionScheme`](@ref)
 documentation.
 """
-function TrustRegion(;
+function BoundedTrustRegion(;
         concrete_jac = nothing, linsolve = nothing,
         radius_update_scheme = RadiusUpdateSchemes.Simple, max_trust_radius::Real = 0 // 1,
         initial_trust_radius::Real = 0 // 1, step_threshold::Real = 1 // 10000,
         shrink_threshold::Real = 1 // 4, expand_threshold::Real = 3 // 4,
         shrink_factor::Real = 1 // 4, expand_factor::Real = 2 // 1,
         max_shrink_times::Int = 32,
-        autodiff = nothing, vjp_autodiff = nothing, jvp_autodiff = nothing
+        autodiff = nothing, vjp_autodiff = nothing, jvp_autodiff = nothing,
+        lb = nothing, ub = nothing
 )
     descent = Dogleg(; linsolve)
-    trustregion = GenericTrustRegionScheme(;
+    trustregion = BoundedTrustRegionScheme(;
         method = radius_update_scheme, step_threshold, shrink_threshold, expand_threshold,
         shrink_factor, expand_factor, initial_trust_radius, max_trust_radius
     )
@@ -42,121 +44,10 @@ function TrustRegion(;
     )
 end
 
-# Don't Pollute the namespace
-"""
-    RadiusUpdateSchemes
-
-`RadiusUpdateSchemes` is provides different types of radius update schemes implemented in
-the Trust Region method. These schemes specify how the radius of the so-called trust region
-is updated after each iteration of the algorithm. The specific role and caveats associated
-with each scheme are provided below.
-
-## Using `RadiusUpdateSchemes`
-
-Simply put the desired scheme as follows:
-`sol = solve(prob, alg = TrustRegion(radius_update_scheme = RadiusUpdateSchemes.Hei))`.
-"""
-module RadiusUpdateSchemes
-# The weird definitions here are needed to main compatibility with the older enum variants
-
-abstract type AbstractRadiusUpdateScheme end
-
-function Base.show(io::IO, rus::AbstractRadiusUpdateScheme)
-    print(io, "RadiusUpdateSchemes.$(string(nameof(typeof(rus)))[3:end])")
-end
-
-const T = AbstractRadiusUpdateScheme
-
-struct __Simple <: AbstractRadiusUpdateScheme end
-"""
-    RadiusUpdateSchemes.Simple
-
-The simple or conventional radius update scheme. This scheme is chosen by default and
-follows the conventional approach to update the trust region radius, i.e. if the trial
-step is accepted it increases the radius by a fixed factor (bounded by a maximum radius)
-and if the trial step is rejected, it shrinks the radius by a fixed factor.
-"""
-const Simple = __Simple()
-
-struct __NLsolve <: AbstractRadiusUpdateScheme end
-"""
-    RadiusUpdateSchemes.NLsolve
-
-The same updating scheme as in NLsolve's (https://github.com/JuliaNLSolvers/NLsolve.jl)
-trust region dogleg implementation.
-"""
-const NLsolve = __NLsolve()
-
-struct __NocedalWright <: AbstractRadiusUpdateScheme end
-"""
-    RadiusUpdateSchemes.NocedalWright
-
-Trust region updating scheme as in Nocedal and Wright [see Alg 11.5, page 291].
-"""
-const NocedalWright = __NocedalWright()
-
-struct __Hei <: AbstractRadiusUpdateScheme end
-"""
-    RadiusUpdateSchemes.Hei
-
-This scheme is proposed in [hei2003self](@citet). The trust region radius depends on the
-size (norm) of the current step size. The hypothesis is to let the radius converge to zero
-as the iterations progress, which is more reliable and robust for ill-conditioned as well
-as degenerate problems.
-"""
-const Hei = __Hei()
-
-struct __Yuan <: AbstractRadiusUpdateScheme end
-"""
-    RadiusUpdateSchemes.Yuan
-
-This scheme is proposed by [yuan2015recent](@citet). Similar to Hei's scheme, the
-trust region is updated in a way so that it converges to zero, however here, the radius
-depends on the size (norm) of the current gradient of the objective (merit) function. The
-hypothesis is that the step size is bounded by the gradient size, so it makes sense to let
-the radius depend on the gradient.
-"""
-const Yuan = __Yuan()
-
-struct __Bastin <: AbstractRadiusUpdateScheme end
-"""
-    RadiusUpdateSchemes.Bastin
-
-This scheme is proposed by [bastin2010retrospective](@citet). The scheme is called a
-retrospective update scheme as it uses the model function at the current iteration to
-compute the ratio of the actual reduction and the predicted reduction in the previous trial
-step, and use this ratio to update the trust region radius. The hypothesis is to exploit the
-information made available during the optimization process in order to vary the accuracy
-of the objective function computation.
-"""
-const Bastin = __Bastin()
-
-struct __Fan <: AbstractRadiusUpdateScheme end
-"""
-    RadiusUpdateSchemes.Fan
-
-This scheme is proposed by [fan2006convergence](@citet). It is very much similar to Hei's
-and Yuan's schemes as it lets the trust region radius depend on the current size (norm) of
-the objective (merit) function itself. These new update schemes are known to improve local
-convergence.
-"""
-const Fan = __Fan()
-struct __WangYuan <: AbstractRadiusUpdateScheme end
-"""
-    RadiusUpdateSchemes.WangYuan
-    This scheme is proposed by [wang2010trust](@citet). The trust region radius is updated based
-    the bounds of the affine scaled problem for the Bounded Trust Region Method.
-"""
-const WangYuan = __WangYuan()
-end # module RadiusUpdateSchemes
-
-
-
-
-const RUS = RadiusUpdateSchemes
+include("trust_region.jl")
 
 """
-    GenericTrustRegionScheme(;
+    BoundedTrustRegionScheme(;
         method = RadiusUpdateSchemes.Simple,
         max_trust_radius = nothing, initial_trust_radius = nothing,
         step_threshold = nothing, shrink_threshold = nothing, expand_threshold = nothing,
@@ -197,8 +88,8 @@ the value used in the respective paper.
   - `expand_factor`: the factor to expand the trust region radius with if
     `expand_threshold < r` (with `r` defined in `shrink_threshold`). Defaults to `2.0`.
 """
-@kwdef @concrete struct GenericTrustRegionScheme <: AbstractTrustRegionMethod
-    method <: RUS.AbstractRadiusUpdateScheme = RUS.Simple
+@kwdef @concrete struct BoundedTrustRegionScheme <: AbstractTrustRegionMethod
+    method <: RUS.AbstractRadiusUpdateScheme = RUS.WangYuan
     step_threshold = nothing
     shrink_threshold = nothing
     shrink_factor = nothing
@@ -206,13 +97,20 @@ the value used in the respective paper.
     expand_threshold = nothing
     max_trust_radius = nothing
     initial_trust_radius = nothing
+
 end
 
 function InternalAPI.init(
-        prob::AbstractNonlinearProblem, alg::GenericTrustRegionScheme, f, fu, u, p,
+        prob::AbstractNonlinearProblem, alg::BoundedTrustRegionScheme, f, fu, u, p,
         args...; stats, internalnorm::F = L2_NORM, vjp_autodiff = nothing,
         jvp_autodiff = nothing, kwargs...
 ) where {F}
+    # In the bounded method, instead of solving the ordinary trust region problem, we solve
+    # the problemm in the affine scale space. The affine scale space is defined by the 
+    # variables ak, bk, tk, and Dk. The affine scale space is defined by the following
+    # the bounds lb and ub should be defined in the problem
+
+
     T = promote_type(eltype(u), eltype(fu))
     u0_norm = internalnorm(u)
     fu_norm = internalnorm(fu)
@@ -257,14 +155,14 @@ function InternalAPI.init(
     @bb fu_cache = similar(fu)
     @bb Jδu_cache = similar(fu)
 
-    return GenericTrustRegionSchemeCache(
+    return BoundedTrustRegionSchemeCache(
         alg.method, f, p, mtr, itr, itr, stt, sht, et, shf, ef,
         p1, p2, p3, p4, ϵ, T(0), vjp_operator, jvp_operator, Jᵀfu_cache, Jδu_cache,
         δu_cache, internalnorm, u_cache, fu_cache, false, 0, stats, alg
     )
 end
 
-@concrete mutable struct GenericTrustRegionSchemeCache <: AbstractTrustRegionMethodCache
+@concrete mutable struct BoundedTrustRegionSchemeCache <: AbstractTrustRegionMethodCache
     method
     f
     p
@@ -294,10 +192,15 @@ end
     shrink_counter::Int
     stats::NLStats
     alg
+    # Adding affine scale parameters (WangYuan 2010)
+    ak
+    bk
+    tk
+    Dk
 end
 
 function InternalAPI.reinit!(
-        cache::GenericTrustRegionSchemeCache; p = cache.p, u0 = nothing, kwargs...
+        cache::BoundedTrustRegionSchemeCache; p = cache.p, u0 = nothing, kwargs...
 )
     cache.p = p
     if u0 !== nothing
@@ -315,6 +218,28 @@ for func in (
     @eval function $(func)(val, ::Type{T}, args...) where {T}
         iszero(val) && return $(func)(nothing, T, args...)
         return T(val)
+    end
+end
+
+function update_vectors_ak_bk!(ak, bk, u, lb, ub)
+    ak .= u .- lb
+    bk .= ub .- u
+end
+
+function calculate_tk(ak, bk, gk, Delta)
+    tk = sqrt(sum(ak.*gk)+sum(bk.*abs.(gk)))/Delta
+    return tk
+end
+
+function update_Dk!(Dk, tk, ak, bk, gk, Delta, epsilon)
+    for i in axis(Dk, 1)
+        if (ak[i] <= Delta) & (gk[i] >= epsilon*ak[i])
+            Dk[i,i] = tk * sqrt(ak[i]/gk[i])
+        elseif (bk[i] <= Delta) & (-gk[i] >= epsilon*bk[i])
+            Dk[i,i] = tk * sqrt(bk[i]/abs(gk[i]))
+        else
+            Dk[i,i] = 1
+        end
     end
 end
 
@@ -372,18 +297,9 @@ end
 
 expand_factor(::Nothing, ::Type{T}, method) where {T} = T(2)
 
-function rfunc_adaptive_trust_region(
-        r::R, c2::R, M::R, γ1::R, γ2::R, β::R
-) where {R <: Real}
-    return ifelse(
-        r ≥ c2,
-        (2 * (M - 1 - γ2) * atan(r - c2) + (1 + γ2)) / R(π),
-        (1 - γ1 - β) * (exp(r - c2) + β / (1 - γ1 - β))
-    )
-end
 
 function InternalAPI.solve!(
-        cache::GenericTrustRegionSchemeCache, J, fu, u, δu, descent_stats
+        cache::BoundedTrustRegionSchemeCache, J, fu, u, δu, descent_stats
 )
     T = promote_type(eltype(u), eltype(fu))
     @bb @. cache.u_cache = u + δu
@@ -406,6 +322,9 @@ function InternalAPI.solve!(
     else
         cache.last_step_accepted = false
     end
+
+    if cache.method isa RUS.__WangYuan
+
 
     if cache.method isa RUS.__Simple
         if cache.ρ < cache.shrink_threshold
